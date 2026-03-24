@@ -1,0 +1,131 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      HOMEBREW_TAP_REPO: yunusemreyakisan/homebrew-tap
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Run app tests
+        run: swift test
+
+      - name: Run core tests
+        run: swift test --package-path Core
+
+      - name: Resolve version and tag
+        id: version
+        run: |
+          set -euo pipefail
+
+          version="$(
+            sed -n 's/.*static let version = "\(.*\)".*/\1/p' Sources/GarbagemanDesktop/AppBuildInfo.swift | head -n 1
+          )"
+
+          if [[ -z "$version" ]]; then
+            echo "Unable to determine app version." >&2
+            exit 1
+          fi
+
+          tag="v$version"
+          current_commit="$(git rev-parse HEAD)"
+
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            tagged_commit="$(git rev-list -n 1 "$tag")"
+            if [[ "$tagged_commit" != "$current_commit" ]]; then
+              echo "Tag $tag already exists on $tagged_commit. Bump AppBuildInfo.version before releasing a new build." >&2
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" -m "garbageman $tag"
+            git push origin "$tag"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build app bundle
+        run: ./scripts/build-app-bundle.sh
+
+      - name: Build DMG
+        run: ./scripts/package-dmg.sh
+
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.version.outputs.version }}"
+          mv "dist/garbageman.dmg" "dist/garbageman-${version}.dmg"
+          shasum -a 256 "dist/garbageman-${version}.dmg" > "dist/garbageman-${version}.dmg.sha256"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: garbageman ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/garbageman-${{ steps.version.outputs.version }}.dmg
+            dist/garbageman-${{ steps.version.outputs.version }}.dmg.sha256
+
+      - name: Update Homebrew cask
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "HOMEBREW_TAP_TOKEN is not set; skipping Homebrew cask update."
+            exit 0
+          fi
+
+          version="${{ steps.version.outputs.version }}"
+          tag="${{ steps.version.outputs.tag }}"
+          dmg_name="garbageman-${version}.dmg"
+          dmg_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${dmg_name}"
+          sha256="$(cut -d' ' -f1 "dist/${dmg_name}.sha256")"
+          temp_dir="$(mktemp -d)"
+          tap_dir="$temp_dir/tap"
+
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${HOMEBREW_TAP_REPO}.git" "$tap_dir"
+          mkdir -p "$tap_dir/Casks"
+
+          cat > "$tap_dir/Casks/garbageman.rb" <<EOF
+          cask "garbageman" do
+            version "${version}"
+            sha256 "${sha256}"
+
+            url "${dmg_url}"
+            name "garbageman"
+            desc "Minimal macOS disk cleanup app"
+            homepage "https://github.com/${GITHUB_REPOSITORY}"
+
+            app "garbageman.app"
+          end
+          EOF
+
+          cd "$tap_dir"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/garbageman.rb
+          git commit -m "Update garbageman cask to ${tag}" || exit 0
+          git push origin HEAD:stable
