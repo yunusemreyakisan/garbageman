@@ -8,6 +8,8 @@ APP_NAME="garbageman"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 ENTITLEMENTS_PATH="$ROOT_DIR/Resources/garbageman.entitlements"
 VERSION_FILE="$ROOT_DIR/Sources/GarbagemanDesktop/AppBuildInfo.swift"
+REQUIRE_DEVELOPER_IDENTITY="${REQUIRE_DEVELOPER_IDENTITY:-0}"
+DEVELOPER_IDENTITY="${DEVELOPER_IDENTITY:-}"
 
 version="$(
   sed -n 's/.*static let version = "\(.*\)".*/\1/p' "$VERSION_FILE" | head -n 1
@@ -15,6 +17,11 @@ version="$(
 
 if [[ -z "$version" ]]; then
   echo "Unable to determine app version from $VERSION_FILE" >&2
+  exit 1
+fi
+
+if [[ "$REQUIRE_DEVELOPER_IDENTITY" == "1" && -z "$DEVELOPER_IDENTITY" ]]; then
+  echo "DEVELOPER_IDENTITY must be set when REQUIRE_DEVELOPER_IDENTITY=1." >&2
   exit 1
 fi
 
@@ -58,8 +65,20 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-if [[ -n "${DEVELOPER_IDENTITY:-}" ]]; then
-  codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS_PATH" --sign "$DEVELOPER_IDENTITY" "$APP_BUNDLE"
+if [[ -n "$DEVELOPER_IDENTITY" ]]; then
+  codesign \
+    --force \
+    --deep \
+    --strict \
+    --timestamp \
+    --options runtime \
+    --entitlements "$ENTITLEMENTS_PATH" \
+    --sign "$DEVELOPER_IDENTITY" \
+    "$APP_BUNDLE"
+else
+  codesign --force --deep --sign - "$APP_BUNDLE"
 fi
+
+codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
 echo "Built $APP_BUNDLE"

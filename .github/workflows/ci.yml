@@ -27,5 +27,5 @@ jobs:
       - name: Run core tests
         run: swift test --package-path Core
 
-      - name: Build release app executable
-        run: swift build -c release --product garbageman
+      - name: Build signed app bundle
+        run: ./scripts/build-app-bundle.sh

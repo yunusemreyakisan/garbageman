@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 45
     env:
       HOMEBREW_TAP_REPO: yunusemreyakisan/homebrew-tap
+      REQUIRE_DEVELOPER_IDENTITY: "1"
+      REQUIRE_NOTARIZATION: "1"
 
     steps:
       - name: Check out source
@@ -24,13 +26,7 @@ jobs:
       - name: Show Swift version
         run: swift --version
 
-      - name: Run app tests
-        run: swift test
-
-      - name: Run core tests
-        run: swift test --package-path Core
-
-      - name: Resolve version and tag
+      - name: Resolve version
         id: version
         run: |
           set -euo pipefail
@@ -46,30 +42,110 @@ jobs:
 
           tag="v$version"
           current_commit="$(git rev-parse HEAD)"
+          tag_exists="false"
+          should_release="true"
 
           if git rev-parse "$tag" >/dev/null 2>&1; then
+            tag_exists="true"
             tagged_commit="$(git rev-list -n 1 "$tag")"
+
             if [[ "$tagged_commit" != "$current_commit" ]]; then
-              echo "Tag $tag already exists on $tagged_commit. Bump AppBuildInfo.version before releasing a new build." >&2
-              exit 1
+              echo "Version $version is already tagged on $tagged_commit; skipping release for this commit."
+              should_release="false"
             fi
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$tag" -m "garbageman $tag"
-            git push origin "$tag"
           fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=$tag_exists" >> "$GITHUB_OUTPUT"
+          echo "should_release=$should_release" >> "$GITHUB_OUTPUT"
 
-      - name: Build app bundle
-        run: ./scripts/build-app-bundle.sh
+      - name: Validate release secrets
+        if: steps.version.outputs.should_release == 'true'
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for secret_name in BUILD_CERTIFICATE_BASE64 P12_PASSWORD KEYCHAIN_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!secret_name:-}" ]]; then
+              missing+=("$secret_name")
+            fi
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required release secrets: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Install signing certificate
+        if: steps.version.outputs.should_release == 'true'
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          certificate_path="$RUNNER_TEMP/developer-id.p12"
+          keychain_path="$RUNNER_TEMP/garbageman-signing.keychain-db"
+
+          if base64 --decode </dev/null >/dev/null 2>&1; then
+            printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 --decode > "$certificate_path"
+          else
+            printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 -D > "$certificate_path"
+          fi
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
+
+          existing_keychains=()
+          while IFS= read -r line; do
+            existing_keychains+=("${line//\"/}")
+          done < <(security list-keychains -d user | sed 's/^[[:space:]]*//')
+
+          security list-keychains -d user -s "$keychain_path" "${existing_keychains[@]}"
+          security default-keychain -d user -s "$keychain_path"
+
+          developer_identity="$(
+            security find-identity -v -p codesigning "$keychain_path" \
+              | sed -n 's/.*) \(Developer ID Application:.*\)/\1/p' \
+              | head -n 1
+          )"
+
+          if [[ -z "$developer_identity" ]]; then
+            echo "Unable to find a Developer ID Application identity in the imported certificate." >&2
+            exit 1
+          fi
+
+          echo "DEVELOPER_IDENTITY=$developer_identity" >> "$GITHUB_ENV"
+
+      - name: Run app tests
+        run: swift test
+
+      - name: Run core tests
+        run: swift test --package-path Core
 
       - name: Build DMG
+        if: steps.version.outputs.should_release == 'true'
+        env:
+          DEVELOPER_IDENTITY: ${{ env.DEVELOPER_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: ./scripts/package-dmg.sh
 
       - name: Prepare release assets
+        if: steps.version.outputs.should_release == 'true'
         run: |
           set -euo pipefail
 
@@ -77,17 +153,39 @@ jobs:
           mv "dist/garbageman.dmg" "dist/garbageman-${version}.dmg"
           shasum -a 256 "dist/garbageman-${version}.dmg" > "dist/garbageman-${version}.dmg.sha256"
 
+      - name: Create tag
+        if: steps.version.outputs.should_release == 'true' && steps.version.outputs.tag_exists != 'true'
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "garbageman ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: garbageman ${{ steps.version.outputs.tag }}
-          generate_release_notes: true
-          files: |
-            dist/garbageman-${{ steps.version.outputs.version }}.dmg
-            dist/garbageman-${{ steps.version.outputs.version }}.dmg.sha256
+        if: steps.version.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          tag="${{ steps.version.outputs.tag }}"
+          version="${{ steps.version.outputs.version }}"
+          title="garbageman ${tag}"
+          assets=(
+            "dist/garbageman-${version}.dmg"
+            "dist/garbageman-${version}.dmg.sha256"
+          )
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+          else
+            gh release create "$tag" "${assets[@]}" --title "$title" --generate-notes
+          fi
 
       - name: Update Homebrew cask
+        if: steps.version.outputs.should_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
