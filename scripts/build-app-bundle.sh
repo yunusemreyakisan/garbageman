@@ -65,6 +65,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+xattr -cr "$APP_BUNDLE" 2>/dev/null || true
+
 if [[ -n "$DEVELOPER_IDENTITY" ]]; then
   codesign \
     --force \
