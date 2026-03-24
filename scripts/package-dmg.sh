@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
-APP_BUNDLE="$DIST_DIR/garbageman.app"
+APP_BUNDLE="$DIST_DIR/Garbageman.app"
 DMG_PATH="$DIST_DIR/garbageman.dmg"
 REQUIRE_NOTARIZATION="${REQUIRE_NOTARIZATION:-0}"
 DEVELOPER_IDENTITY="${DEVELOPER_IDENTITY:-}"
@@ -36,7 +36,7 @@ fi
 "$ROOT_DIR/scripts/build-app-bundle.sh"
 
 rm -f "$DMG_PATH"
-hdiutil create -volname "garbageman" -srcfolder "$APP_BUNDLE" -ov -format UDZO "$DMG_PATH"
+hdiutil create -volname "Garbageman" -srcfolder "$APP_BUNDLE" -ov -format UDZO "$DMG_PATH"
 
 if [[ -n "$DEVELOPER_IDENTITY" ]]; then
   codesign --force --timestamp --sign "$DEVELOPER_IDENTITY" "$DMG_PATH"

@@ -41,7 +41,7 @@ The release workflow will:
 1. run tests
 2. skip publishing if that version tag already points at an older commit
 3. import the Developer ID certificate from GitHub secrets
-4. build, sign, notarize, and staple `garbageman.app` and `garbageman-X.Y.Z.dmg`
+4. build, sign, notarize, and staple `Garbageman.app` and `garbageman-X.Y.Z.dmg`
 5. create `vX.Y.Z` if that version tag does not already exist on the current commit
 6. create or update the GitHub Release for that tag
 7. optionally update the Homebrew cask when `HOMEBREW_TAP_TOKEN` is configured

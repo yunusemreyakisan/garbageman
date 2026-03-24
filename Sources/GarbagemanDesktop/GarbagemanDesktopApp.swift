@@ -5,7 +5,7 @@ struct GarbagemanDesktopApp: App {
     @StateObject private var viewModel = AppViewModel()
 
     var body: some Scene {
-        WindowGroup("garbageman") {
+        WindowGroup("Garbageman") {
             ContentView(viewModel: viewModel)
                 .frame(minWidth: 800, minHeight: 560)
         }

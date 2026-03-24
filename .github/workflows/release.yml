@@ -217,7 +217,7 @@ jobs:
             desc "Minimal macOS disk cleanup app"
             homepage "https://github.com/${GITHUB_REPOSITORY}"
 
-            app "garbageman.app"
+            app "Garbageman.app"
           end
           EOF
 
