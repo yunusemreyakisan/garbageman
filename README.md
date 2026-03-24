@@ -43,6 +43,10 @@ The recommended way to install Garbageman is to download the latest disk image f
 2. Open the disk image.
 3. Drag `Garbageman.app` into `/Applications`.
 
+## Prefer the CLI?
+
+If you prefer a terminal-first workflow, use [garbageman-cli](https://github.com/yunusemreyakisan/garbageman-cli).
+
 ## Permissions and safety
 
 Garbageman is designed to be cautious by default.
