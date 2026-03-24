@@ -5,9 +5,7 @@
 
 Garbageman is the native macOS desktop companion to the `garbageman` CLI. It brings the same cleanup categories and safety rules into a single-window SwiftUI app: scan first, inspect what is reclaimable, then explicitly confirm deletion.
 
-- macOS 13+
-- Native `SwiftUI` interface
-- Distributed as a `.dmg`
+<img width="1293" height="844" alt="Screenshot 2026-03-24 at 16 23 10" src="https://github.com/user-attachments/assets/e2ed31d8-1b9c-423e-9341-4554bece28c8" />
 
 ## Key features
 
