@@ -14,8 +14,6 @@ jobs:
     timeout-minutes: 45
     env:
       HOMEBREW_TAP_REPO: yunusemreyakisan/homebrew-tap
-      REQUIRE_DEVELOPER_IDENTITY: "1"
-      REQUIRE_NOTARIZATION: "1"
 
     steps:
       - name: Check out source
@@ -60,7 +58,8 @@ jobs:
           echo "tag_exists=$tag_exists" >> "$GITHUB_OUTPUT"
           echo "should_release=$should_release" >> "$GITHUB_OUTPUT"
 
-      - name: Validate release secrets
+      - name: Determine release mode
+        id: release_mode
         if: steps.version.outputs.should_release == 'true'
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
@@ -72,20 +71,35 @@ jobs:
         run: |
           set -euo pipefail
 
+          provided=()
           missing=()
           for secret_name in BUILD_CERTIFICATE_BASE64 P12_PASSWORD KEYCHAIN_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
-            if [[ -z "${!secret_name:-}" ]]; then
+            if [[ -n "${!secret_name:-}" ]]; then
+              provided+=("$secret_name")
+            else
               missing+=("$secret_name")
             fi
           done
 
+          if (( ${#provided[@]} == 0 )); then
+            echo "mode=adhoc" >> "$GITHUB_OUTPUT"
+            echo "REQUIRE_DEVELOPER_IDENTITY=0" >> "$GITHUB_ENV"
+            echo "REQUIRE_NOTARIZATION=0" >> "$GITHUB_ENV"
+            echo "Release secrets are not configured; building an ad-hoc DMG."
+            exit 0
+          fi
+
           if (( ${#missing[@]} > 0 )); then
-            printf 'Missing required release secrets: %s\n' "${missing[*]}" >&2
+            printf 'Partial release secret configuration detected. Missing: %s\n' "${missing[*]}" >&2
             exit 1
           fi
 
+          echo "mode=signed" >> "$GITHUB_OUTPUT"
+          echo "REQUIRE_DEVELOPER_IDENTITY=1" >> "$GITHUB_ENV"
+          echo "REQUIRE_NOTARIZATION=1" >> "$GITHUB_ENV"
+
       - name: Install signing certificate
-        if: steps.version.outputs.should_release == 'true'
+        if: steps.version.outputs.should_release == 'true' && steps.release_mode.outputs.mode == 'signed'
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
           P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
@@ -130,9 +144,11 @@ jobs:
           echo "DEVELOPER_IDENTITY=$developer_identity" >> "$GITHUB_ENV"
 
       - name: Run app tests
+        if: steps.version.outputs.should_release == 'true'
         run: swift test
 
       - name: Run core tests
+        if: steps.version.outputs.should_release == 'true'
         run: swift test --package-path Core
 
       - name: Build DMG
